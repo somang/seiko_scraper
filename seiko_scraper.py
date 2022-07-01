@@ -6,7 +6,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys 
 from selenium.common.exceptions import NoSuchElementException        
-
+import urllib
+import pandas as pd
 from bs4 import BeautifulSoup
 import pprint
 import time
@@ -19,7 +20,7 @@ def check_exists(driver, css_selector):
     return True
 
 
-def handle_spec_element(soup):
+def handle_spec_element(soup, price):
     dlTag = soup.find_all("dl", {"class":"_list"})
     dtdds = []
     for tag in dlTag:
@@ -28,14 +29,12 @@ def handle_spec_element(soup):
         for i in range(len(keys)):
             strip_keys = keys[i].text.strip()
             strip_vals = list(filter(None, [x.strip() for x in vals[i].text.split('\n')]))
-
             dtdds.append((strip_keys, strip_vals))
-
-    info_collection = {}
+    info_collection = {'price': price}
     for j in dtdds:
-        info_collection[j[0]] = j[1]
-    
+        info_collection[j[0]] = j[1]    
     pprint.pprint(info_collection)
+    return info_collection
     
 
 def find_element_click(driver, by, expression, search_window=None, timeout=32, ignore_exception=None,
@@ -69,8 +68,17 @@ def find_element_click(driver, by, expression, search_window=None, timeout=32, i
                 time.sleep(poll_frequency)
                 break
         except Exception as e:
-            raise
+            return False
     return False
+
+
+# def save_img():
+#     # get the image source
+#     img = driver.find_element_by_xpath('//div[@id="recaptcha_image"]/img')
+#     src = img.get_attribute('src')
+
+#     # download the image
+#     urllib.urlretrieve(src, "captcha.png")
 
 
 def main():
@@ -79,7 +87,7 @@ def main():
     driver.get("https://www.seikowatches.com/ca-en/watchfinder?page=1")
     watchlist_div_selector = '#app > div > div.watchfinder-result > div > div.watchfinder-list > div.row.row-cols-2.row-cols-md-4.gy-1.gy-md-3.gx-1.gx-md-3'
     button_selector = '#app > div > div.watchfinder-result > div > div.watchfinder-list > div.watchfinder-list-more > button'
-    
+    watch_info = {} # to store all watch info
     timeout = 5
     try:
         element_present = EC.presence_of_element_located((By.CSS_SELECTOR, watchlist_div_selector))
@@ -88,52 +96,54 @@ def main():
         element_present = EC.presence_of_element_located((By.CSS_SELECTOR, button_selector))
         WebDriverWait(driver, timeout).until(element_present)
 
-        while check_exists(driver, button_selector):           
-            # Get scroll height
-            last_height = driver.execute_script("return document.body.scrollHeight")
-            # Scroll down to bottom
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            # Lets hop on to the next page
-            more_button = find_element_click(driver, By.CSS_SELECTOR, button_selector)
+        # while check_exists(driver, button_selector):  
+        #     # Get scroll height
+        #     last_height = driver.execute_script("return document.body.scrollHeight")
+        #     # Scroll down to bottom
+        #     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        #     # Lets hop on to the next page
+        #     more_button = find_element_click(driver, By.CSS_SELECTOR, button_selector)
+        #     print(more_button)
 
-            # Wait to load page
-            time.sleep(timeout)
+        #     # Wait to load page
+        #     time.sleep(timeout)
 
-            # Calculate new scroll height and compare with last scroll height
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
+        #     # Calculate new scroll height and compare with last scroll height
+        #     new_height = driver.execute_script("return document.body.scrollHeight")
+        #     if new_height == last_height:
+        #         break
+        #     last_height = new_height
+            
+        # print(driver.current_url)
 
-            # try:
-            #     element_present = EC.presence_of_element_located((By.CSS_SELECTOR, button_selector))
-            #     WebDriverWait(driver, timeout).until(element_present)
-            # except TimeoutException:
-            #     print(f"Timed out waiting for next page button")
+        # At this point, the preconditions are:
+        # 1. we reached the max page, and 
+        # 2. all watch elements (seriesProducts-item) are loaded.
+        elem_list = driver.find_elements(By.CLASS_NAME, 'seriesProducts-item')
+        for e in elem_list:
+            # first, get the model name
+            watch_name = e.find_element(By.CLASS_NAME, '_info').get_attribute('innerHTML')
+            # then open up the watch, and scrape the info            
+            divTag = BeautifulSoup(watch_name, 'html.parser').find_all("div")
+            model_name, price = divTag[0].text, divTag[1].text
 
-        print(driver.current_url)
+            ActionChains(driver) \
+                .key_down(Keys.CONTROL) \
+                .click(e) \
+                .perform()
+            driver.switch_to.window(driver.window_handles[1])
+            watch_spec_html = driver.find_element(By.CLASS_NAME, 'productSpec-items').get_attribute('innerHTML')
+            soup = BeautifulSoup(watch_spec_html, 'html.parser')
+            # handle each seiko spec element here
+            watch_info[model_name] = handle_spec_element(soup, price)
+            df = pd.DataFrame.from_dict(watch_info)
+            print(df.to_string())
 
-
-        # elem_list = driver.find_elements(By.CLASS_NAME, 'seriesProducts-item')
-        # for e in elem_list:
-        #     ActionChains(driver) \
-        #         .key_down(Keys.CONTROL) \
-        #         .click(e) \
-        #         .perform()
-        #     driver.switch_to.window(driver.window_handles[1])
-
-        #     watch_spec_html = driver.find_element(By.CLASS_NAME, 'productSpec-items').get_attribute('innerHTML')
-        #     soup = BeautifulSoup(watch_spec_html, 'html.parser')
-        #     # handle each seiko spec element here
-        #     handle_spec_element(soup)
-        #     driver.close()
-        #     driver.switch_to.window(driver.window_handles[0])
-
+            driver.close()
+            driver.switch_to.window(driver.window_handles[0])
+            break
     except TimeoutException:
         print("Timed out waiting for list div to load")
-
-
-
 
     driver.close()
 
